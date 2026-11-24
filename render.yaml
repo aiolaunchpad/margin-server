@@ -1,0 +1,22 @@
+# Render Blueprint for this repo (server code at the repo root).
+# Free plan: sleeps when idle and has no persistent disk (daily usage counts reset on restart).
+# For production switch to `plan: starter` and add the disk block below.
+services:
+  - type: web
+    name: margin-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TOKEN_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CHECKOUT_URL
+        sync: false
+#   disk:
+#     name: margin-data
+#     mountPath: /data
+#     sizeGB: 1

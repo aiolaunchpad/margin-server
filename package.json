@@ -1,0 +1,14 @@
+{
+  "name": "margin-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Margin backend: holds the AI key, anonymous per-install tokens, free/pro quotas, Stripe webhook.",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "OPENAI_ENV_FILE=../backend-secrets/openai.env DATA_DIR=./data-local node src/index.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}
