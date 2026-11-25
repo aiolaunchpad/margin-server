@@ -4,8 +4,9 @@ import { RateLimiter } from './ratelimit.js';
 import { systemFor, TASKS, MODES, JSON_TASKS, MAX_TOKENS } from './prompts.js';
 import { chatComplete, UpstreamError } from './openai.js';
 import { verifyStripeSignature, applyStripeEvent } from './stripe.js';
+import { imageSizeFromDataUrl } from './image-size.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 const IMAGE_RE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
 const MAX_MESSAGES = 30;
 const MAX_TEXT = 24000;
@@ -20,6 +21,31 @@ export class HttpError extends Error {
 export const utcDay = (d = new Date()) => d.toISOString().slice(0, 10);
 export function nextUtcMidnight(d = new Date()) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1)).toISOString();
+}
+
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+const round6 = (n) => Math.round(n * 1e6) / 1e6;
+const EMPTY_BOX = Object.freeze({ x: 0, y: 0, w: 0, h: 0, confidence: 0 });
+
+/** Parse + clamp a locate-task model response into {x,y,w,h,confidence} in [0,1]. Exported for tests. */
+export function normalizeLocateBox(text) {
+  let obj = text;
+  if (typeof text === 'string') {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return { ...EMPTY_BOX };
+    try { obj = JSON.parse(text.slice(start, end + 1)); } catch { return { ...EMPTY_BOX }; }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ...EMPTY_BOX };
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const x0 = num(obj.x), y0 = num(obj.y), w0 = num(obj.w), h0 = num(obj.h);
+  if (x0 === null || y0 === null || w0 === null || h0 === null) return { ...EMPTY_BOX };
+  const confidence = round6(clamp01(num(obj.confidence) ?? 0));
+  let x = clamp01(x0), y = clamp01(y0), w = clamp01(w0), h = clamp01(h0);
+  if (x + w > 1) w = 1 - x;
+  if (y + h > 1) h = 1 - y;
+  if (w <= 0 || h <= 0) return { ...EMPTY_BOX };
+  return { x: round6(x), y: round6(y), w: round6(w), h: round6(h), confidence };
 }
 
 /** Validate + normalize a /complete body. Throws HttpError(400). Exported for tests. */
@@ -56,6 +82,8 @@ export function validateCompleteBody(b) {
 export function createApp({ config, store, fetchImpl = globalThis.fetch, log = () => {}, now = () => new Date() }) {
   const perInstall = new RateLimiter({ limit: config.rateLimitPerMinute, windowMs: 60_000 });
   const perIp = new RateLimiter({ limit: config.rateLimitPerMinute * 2, windowMs: 60_000 });
+  const locatePerInstall = new RateLimiter({ limit: config.locateRateLimitPerMinute, windowMs: 60_000 });
+  const locatePerIp = new RateLimiter({ limit: config.locateRateLimitPerMinute * 2, windowMs: 60_000 });
   const registerLimiter = new RateLimiter({ limit: config.registerPerHour, windowMs: 3_600_000 });
   const brand = process.env.BRAND_NAME || 'Margin';
 
@@ -146,16 +174,24 @@ export function createApp({ config, store, fetchImpl = globalThis.fetch, log = (
 
   async function complete(req) {
     const iid = auth(req);
-    const rl = perInstall.take(iid);
-    const rlIp = perIp.take(clientIp(req));
+    const body = await readJson(req);
+    const locateRequest = body && body.task === 'locate';
+    const rl = locateRequest ? locatePerInstall.take(iid) : perInstall.take(iid);
+    const rlIp = locateRequest ? locatePerIp.take(clientIp(req)) : perIp.take(clientIp(req));
     if (!rl.ok || !rlIp.ok) throw new HttpError(429, 'You’re going a little fast — wait a few seconds and try again.', { code: 'rate_limited', retryAfter: Math.max(rl.retryAfter, rlIp.retryAfter) });
-    const { task, mode, messages, hasContext } = validateCompleteBody(await readJson(req));
+    const { task, mode, messages, hasContext } = validateCompleteBody(body);
     const inst = await store.upsertInstall(iid);
     const plan = inst.plan === 'pro' ? 'pro' : 'free';
     const day = utcDay(now());
     if (task === 'ping') return { status: 200, data: { text: 'ok', usage: await usageFor(iid, plan) } };
+    if (task === 'locate') {
+      if (messages.length !== 1 || messages[0].role !== 'user' || !messages[0].image) throw new HttpError(400, 'Locate requires exactly one image.');
+      const dim = imageSizeFromDataUrl(messages[0].image);
+      if (!dim) throw new HttpError(400, 'Invalid image.');
+      if (Math.max(dim.width, dim.height) > 1024) throw new HttpError(400, 'Image is too large. Longest side must be 1024 pixels or less.');
+    }
 
-    const counted = config.countedTasks.has(task);
+    const counted = task !== 'locate' && config.countedTasks.has(task);
     const limit = limitFor(plan);
     if (counted) {
       const r = await store.reserve(iid, day, limit);
@@ -167,10 +203,19 @@ export function createApp({ config, store, fetchImpl = globalThis.fetch, log = (
     }
     const escalate = config.escalationModel && (task === 'verify' || mode === 'explain') && (config.escalateFor === 'all' || (config.escalateFor === 'pro' && plan === 'pro'));
     const model = escalate ? config.escalationModel : config.model;
+    const completeMessages = task === 'locate' ? [{ role: 'user', text: '', image: messages[0].image }] : messages;
     try {
-      const out = await chatComplete({ config, fetchImpl, model, system: systemFor({ task, mode, brand, hasContext }), messages, json: JSON_TASKS.has(task), maxTokens: MAX_TOKENS[task] });
-      log({ evt: 'complete', task, mode, model: out.model, plan, tokens: out.tokens?.total_tokens, images: messages.filter((m) => m.image).length });
-      return { status: 200, data: { text: out.text, model: out.model, usage: await usageFor(iid, plan) } };
+      const out = await chatComplete({
+        config, fetchImpl, model,
+        system: systemFor({ task, mode, brand, hasContext }),
+        messages: completeMessages,
+        json: JSON_TASKS.has(task),
+        maxTokens: MAX_TOKENS[task],
+        imageDetail: task === 'locate' ? 'low' : undefined,
+      });
+      const text = task === 'locate' ? JSON.stringify(normalizeLocateBox(out.text)) : out.text;
+      log({ evt: 'complete', task, mode, model: out.model, plan, tokens: out.tokens?.total_tokens, images: completeMessages.filter((m) => m.image).length });
+      return { status: 200, data: { text, model: out.model, usage: await usageFor(iid, plan) } };
     } catch (e) {
       if (counted) await store.release(iid, day); // failed answers never cost the student a solve
       throw e;

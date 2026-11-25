@@ -9,22 +9,22 @@ Zero npm dependencies (Node ≥ 22.13: built-in `node:http` + `node:sqlite`).
 | `GET  /v1/health` | `{ ok, version, model, aiConfigured }` (never shows the key) |
 | `POST /v1/register` `{ installId }` | Extension calls this automatically on first run → HMAC-signed anonymous token |
 | `GET  /v1/me` | `{ plan, usage:{used,limit,resetsAt}, upgradeUrl }` |
-| `POST /v1/complete` | The extension's solve / follow-up / Double-Check / quiz / flashcards calls → `{ text, usage }` |
+| `POST /v1/complete` | The extension's solve / follow-up / Double-Check / quiz / flashcards calls, plus the app's `locate` auto-crop task → `{ text, usage }` |
 | `POST /v1/admin/plan` | Manually set `free`/`pro` for an install (only if `ADMIN_TOKEN` is set) |
 | `POST /v1/stripe/webhook` | Stripe → Pro on `checkout.session.completed`, back to Free when the subscription ends (only if `STRIPE_WEBHOOK_SECRET` is set; never charges anyone) |
 
-- **Free = 5 solves/day per install** (resets at 00:00 UTC). Every AI call (solve, follow-up, Double-Check, quiz, flashcards) counts; failed calls are refunded. At the limit → `429 {code:"quota", upgradeUrl}` and the extension shows the Upgrade card. **OpenAI is not called** once the limit is hit.
+- **Free = 5 solves/day per install** (resets at 00:00 UTC). Every AI call (solve, follow-up, Double-Check, quiz, flashcards) counts; failed calls are refunded. At the limit → `429 {code:"quota", upgradeUrl}` and the extension shows the Upgrade card. **OpenAI is not called** once the limit is hit. `task: "locate"` (question auto-crop) does **not** count against this quota; it has its own per-install rate limit (`LOCATE_RATE_LIMIT_PER_MINUTE`, default 20) and requires exactly one image whose longest side is ≤ 1024 px. The response envelope is unchanged: `{ text, model, usage }` with `text` a JSON box `{x,y,w,h,confidence}` in 0–1 image fractions (clamped; unparseable output becomes `confidence: 0`). Client text on locate is ignored — the prompt is server-owned.
 - **Pro = unlimited** (optional fair-use cap `PRO_DAILY_LIMIT`).
 - **Server-side prompts** — the client's `system` text is ignored, so the endpoint can't be abused as a free general chatbot.
 - Model `gpt-4o-mini` (vision) by default; optional `ESCALATION_MODEL` (e.g. `gpt-4o`) for Double-Check/Explain, Pro-only by default.
-- Rate limits (per install + per IP), 8 MB body cap, strict input validation, CORS limited to `chrome-extension://` origins (pin your store ID with `ALLOWED_EXTENSION_IDS`).
+- Rate limits (per install + per IP; locate uses a separate limiter), 8 MB body cap, strict input validation, CORS limited to `chrome-extension://` origins (pin your store ID with `ALLOWED_EXTENSION_IDS`). Native apps that send no `Origin` are allowed unless `ALLOW_NO_ORIGIN=false`.
 - Storage: SQLite file in `DATA_DIR` behind a small adapter (`src/store.js`) — swap in Postgres/Redis by implementing the same 7 methods.
 
 ## Run locally
 ```bash
 cd server
 npm run dev        # reads ../backend-secrets/openai.env, listens on http://localhost:8787/v1
-npm test           # 13 tests, OpenAI mocked (no spend)
+npm test           # OpenAI mocked (no spend)
 ```
 The extension's default server is `http://localhost:8787/v1` (`extension/shared/brand.js`).
 

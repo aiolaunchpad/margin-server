@@ -14,9 +14,10 @@ export function toOpenAIMessages(system, messages, detail = 'high') {
   return out;
 }
 
-export async function chatComplete({ config, fetchImpl, model, system, messages, json, maxTokens }) {
+export async function chatComplete({ config, fetchImpl, model, system, messages, json, maxTokens, imageDetail }) {
   if (!config.openaiApiKey) throw new UpstreamError('The AI service is not configured yet.', 503);
-  const body = { model, messages: toOpenAIMessages(system, messages, config.imageDetail || 'high'), max_completion_tokens: maxTokens };
+  const detail = imageDetail || config.imageDetail || 'high';
+  const body = { model, messages: toOpenAIMessages(system, messages, detail), max_completion_tokens: maxTokens };
   if (supportsTemperature(model)) body.temperature = 0.2;
   if (json) body.response_format = { type: 'json_object' };
   const ctrl = new AbortController();

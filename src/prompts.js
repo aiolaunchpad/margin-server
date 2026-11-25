@@ -3,9 +3,9 @@
  * decides what the model is told, so the endpoint cannot be used as a free general-purpose LLM.
  * Output formats mirror extension/shared/prompts.js so the extension's parser renders them.
  */
-export const TASKS = Object.freeze(['solve', 'followup', 'verify', 'quiz', 'flashcards', 'ping']);
+export const TASKS = Object.freeze(['solve', 'followup', 'verify', 'quiz', 'flashcards', 'locate', 'ping']);
 export const MODES = Object.freeze(['answer', 'coach', 'explain']);
-export const JSON_TASKS = new Set(['solve', 'verify', 'quiz', 'flashcards']);
+export const JSON_TASKS = new Set(['solve', 'verify', 'quiz', 'flashcards', 'locate']);
 
 const SOLVE_SCHEMA = `Return ONLY a JSON object, no prose outside it, with the keys in this order:
 {
@@ -52,9 +52,11 @@ ${SOLVE_SCHEMA}`;
       return 'You create excellent practice material strictly from the provided notes. Return ONLY JSON matching: {"title":"...","questions":[{"type":"mcq","question":"...","options":["...","...","...","..."],"answerIndex":0,"explanation":"..."},{"type":"short","question":"...","answer":"...","keywords":["..."],"explanation":"..."}]}';
     case 'flashcards':
       return 'You create excellent practice material strictly from the provided notes. Return ONLY JSON matching: {"title":"...","cards":[{"front":"term or question","back":"concise answer"}]}';
+    case 'locate':
+      return 'Find the single homework question closest to the center of the image, including its stem, any figure, and all answer choices/inputs. Return only JSON {"x":0,"y":0,"w":0,"h":0,"confidence":0} in normalized image coordinates, where x,y are the top-left of the box and w,h are its width and height, each a number from 0 to 1 inclusive. If no question is visible, return {"x":0,"y":0,"w":0,"h":0,"confidence":0}. Do not solve the question or return any other keys or prose.';
     default:
       return 'Reply with the single word: ok';
   }
 }
 
-export const MAX_TOKENS = { solve: 1400, followup: 900, verify: 500, quiz: 2000, flashcards: 1600, ping: 5 };
+export const MAX_TOKENS = { solve: 1400, followup: 900, verify: 500, quiz: 2000, flashcards: 1600, locate: 80, ping: 5 };

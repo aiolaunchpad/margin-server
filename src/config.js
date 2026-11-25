@@ -39,7 +39,8 @@ export function loadConfig(env = process.env) {
     dataDir: env.DATA_DIR || './data',
     store: env.STORE || 'sqlite', // 'sqlite' | 'memory'
     maxBodyBytes: int(env.MAX_BODY_BYTES, 8 * 1024 * 1024),
-    rateLimitPerMinute: int(env.RATE_LIMIT_PER_MINUTE, 30), // per install + per IP on /complete
+    rateLimitPerMinute: int(env.RATE_LIMIT_PER_MINUTE, 30), // per install + per IP on /complete (not locate)
+    locateRateLimitPerMinute: int(env.LOCATE_RATE_LIMIT_PER_MINUTE, 20), // per install + 2x per IP, locate only
     registerPerHour: int(env.REGISTER_PER_HOUR, 20), // per IP
     upstreamTimeoutMs: int(env.UPSTREAM_TIMEOUT_MS, 60000),
     trustProxy: env.TRUST_PROXY !== 'false', // read X-Forwarded-For behind Render/Railway/Fly
